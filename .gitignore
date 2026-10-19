@@ -1,0 +1,17 @@
+# Virtual Environment
+venv/
+env/
+__pycache__/
+*.pyc
+
+# Environment secrets
+.env
+*.env
+
+# Google credentials & tokens
+credentials.json
+token.json
+service_account.json
+
+# Tooling / Claude logs
+.claude/
