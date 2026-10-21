@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>Book Appointment - City Health Clinic</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f3f4f6; min-height: 100vh; display: flex; flex-direction: column; }
+        .header { background: #2563eb; color: white; padding: 1rem; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 100; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+        .header h1 { font-size: 1.1rem; font-weight: 600; }
+        .header .close-btn { background: none; border: none; color: white; font-size: 1.5rem; cursor: pointer; padding: 0.5rem; line-height: 1; }
+        .chat-container { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+        .messages { flex: 1; overflow-y: auto; padding: 1rem; display: flex; flex-direction: column; gap: 0.75rem; }
+        .message { max-width: 85%; padding: 0.75rem 1rem; border-radius: 18px; animation: fadeIn 0.3s ease-out; }
+        .message.user { align-self: flex-end; }
+        .message.bot { align-self: flex-start; }
+        .bubble { border-radius: 18px; padding: 0.75rem 1rem; word-wrap: break-word; }
+        .message.user .bubble { background: #2563eb; color: white; border-bottom-right-radius: 4px; }
+        .message.bot .bubble { background: white; color: #1f2937; border-bottom-left-radius: 4px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .bubble.loading { display: flex; gap: 4px; padding: 0.75rem 1rem; }
+        .bubble.loading span { width: 8px; height: 8px; border-radius: 50%; background: #9ca3af; animation: bounce 1.4s infinite ease-in-out; }
+        .bubble.loading span:nth-child(2) { animation-delay: 0.2s; }
+        .bubble.loading span:nth-child(3) { animation-delay: 0.4s; }
+        .input-area { padding: 1rem; background: white; border-top: 1px solid #e5e7eb; display: flex; gap: 0.5rem; }
+        .input-wrapper { flex: 1; position: relative; }
+        .input-wrapper input { width: 100%; padding: 0.875rem 3rem 0.875rem 1rem; border: 1px solid #e5e7eb; border-radius: 24px; font-size: 1rem; outline: none; transition: border-color 0.2s; }
+        .input-wrapper input:focus { border-color: #2563eb; }
+        .send-btn { position: absolute; right: 0.5rem; top: 50%; transform: translateY(-50%); width: 36px; height: 36px; border-radius: 50%; background: #2563eb; border: none; color: white; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: background 0.2s; }
+        .send-btn:active { background: #1d4ed8; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes bounce { 0%, 80%, 100% { transform: scale(0); } 40% { transform: scale(1); } }
+        .timestamp { font-size: 0.65rem; color: #9ca3af; margin-top: 0.25rem; text-align: right; }
+        .message.bot .timestamp { text-align: left; }
+        .welcome-screen { text-align: center; padding: 2rem 1rem; color: #6b7280; }
+        .welcome-screen h2 { color: #1f2937; margin-bottom: 0.5rem; }
+        .welcome-screen p { font-size: 0.9rem; }
+        .quick-replies { display: flex; flex-wrap: wrap; gap: 0.5rem; justify-content: center; margin-top: 1rem; padding: 0 1rem; }
+        .quick-reply { background: #f3f4f6; border: 1px solid #e5e7eb; padding: 0.5rem 1rem; border-radius: 20px; font-size: 0.85rem; cursor: pointer; transition: all 0.2s; color: #374151; }
+        .quick-reply:active { background: #2563eb; color: white; border-color: #2563eb; }
+        @media (max-width: 480px) { .quick-reply { font-size: 0.8rem; padding: 0.4rem 0.8rem; } }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <button class="close-btn" onclick="window.close()" aria-label="Close">✕</button>
+        <h1>City Health Clinic</h1>
+        <div style="width: 40px;"></div>
+    </header>
+
+    <div class="chat-container">
+        <div class="messages" id="messages"></div>
+
+        <div class="input-area">
+            <div class="input-wrapper">
+                <input type="text" id="input" placeholder="Type a message..." autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+                <button class="send-btn" id="sendBtn" aria-label="Send message">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="22" y1="2" x2="11" y2="13"></line>
+                        <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                    </svg>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        (function() {
+            // Configuration
+            const API_BASE = '';  // Same origin
+            const SESSION_ID = localStorage.getItem('clinic_chat_session_id') || 'session_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now();
+            localStorage.setItem('clinic_chat_session_id', SESSION_ID);
+
+            // DOM elements
+            const messagesEl = document.getElementById('messages');
+            const inputEl = document.getElementById('input');
+            const sendBtn = document.getElementById('sendBtn');
+            let isLoading = false;
+
+            // Utility
+            function formatTime(date) {
+                return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            }
+            function escapeHtml(text) {
+                const div = document.createElement('div');
+                div.textContent = text;
+                return div.innerHTML;
+            }
+            function scrollToBottom() {
+                messagesEl.scrollTop = messagesEl.scrollHeight;
+            }
+
+            // Create message element
+            function addMessage(text, isUser, isLoading = false) {
+                const wrapper = document.createElement('div');
+                wrapper.className = `message ${isUser ? 'user' : 'bot'}`;
+
+                const bubble = document.createElement('div');
+                bubble.className = 'bubble';
+                if (isLoading) bubble.classList.add('loading');
+
+                if (isLoading) {
+                    bubble.innerHTML = `
+                        <span></span>
+                        <span></span>
+                        <span></span>
+                    `;
+                } else {
+                    bubble.innerHTML = escapeHtml(text).replace(/\n/g, '<br>');
+                }
+
+                wrapper.appendChild(bubble);
+                messagesEl.appendChild(wrapper);
+                scrollToBottom();
+
+                if (!isLoading) {
+                    const time = document.createElement('div');
+                    time.className = 'timestamp';
+                    time.textContent = formatTime(new Date());
+                    wrapper.appendChild(time);
+                }
+
+                return isLoading ? bubble : null;
+            }
+
+            function removeLoadingMessage(bubble) {
+                const wrapper = bubble.closest('.message');
+                if (wrapper) wrapper.remove();
+            }
+
+            async function sendMessage() {
+                const text = input.value.trim();
+                if (!text || isLoading) return;
+
+                input.value = '';
+                addMessage(text, true);
+
+                const loadingBubble = addMessage('', false, true);
+
+                try {
+                    const response = await fetch('/chat', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            message: text,
+                            session_id: SESSION_ID,
+                        }),
+                    });
+                    const data = await response.json();
+
+                    // Remove loading
+                    document.querySelector('.message.bot .bubble.loading')?.closest('.message')?.remove();
+
+                    // Add response
+                    addMessage(data.reply, false);
+
+                    if (data.booked) {
+                        // Optional: show celebration
+                    }
+                } catch (error) {
+                    console.error('Chat error:', error);
+                    document.querySelector('.message.bot .bubble.loading')?.closest('.message')?.remove();
+                    addMessage('Something went wrong. Please try again.', false);
+                }
+            }
+
+            // Event listeners
+            sendBtn.addEventListener('click', sendMessage);
+            input.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') sendMessage();
+            });
+
+            // Quick replies
+            function addQuickReplies() {
+                const replies = [
+                    'Book appointment',
+                    'General Consultation',
+                    'Book Blood Test',
+                    'Ultrasound cost',
+                    'Clinic hours',
+                ];
+                const container = document.createElement('div');
+                container.className = 'quick-replies';
+                replies.forEach(text => {
+                    const btn = document.createElement('button');
+                    btn.className = 'quick-reply';
+                    btn.textContent = text;
+                    btn.addEventListener('click', () => {
+                        input.value = text;
+                        sendMessage();
+                        container.remove();
+                    });
+                    container.appendChild(btn);
+                });
+                messagesEl.appendChild(container);
+                scrollToBottom();
+            }
+
+            function scrollToBottom() {
+                messagesEl.scrollTop = messagesEl.scrollHeight;
+            }
+
+            // Initial welcome
+            setTimeout(() => {
+                addMessage("Hello! I'm your City Health Clinic assistant. How can I help you today?", false);
+                setTimeout(addQuickReplies, 500);
+            }, 300);
+
+            // Focus input on load
+            window.addEventListener('load', () => input.focus());
+        })();
+    </script>
+</body>
+</html>

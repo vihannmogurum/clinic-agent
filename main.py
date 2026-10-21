@@ -12,8 +12,13 @@ import logging
 import os
 import pathlib
 
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, Request, Response, Body, Depends
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse, FileResponse
+from pydantic import BaseModel
 import uvicorn
+import uuid
 
 import calendar_service
 import llm
@@ -42,6 +47,18 @@ logging.basicConfig(
 logger = logging.getLogger("clinic_agent")
 
 app = FastAPI(title="Demo Clinic WhatsApp Agent")
+
+# CORS middleware for web widget embedding
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Mount static files
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
 UNANSWERED_LOG = pathlib.Path(__file__).parent / "data" / "unanswered_questions.log"
@@ -325,6 +342,252 @@ async def whatsapp_webhook(request: Request):
     else:
         reply = "Are you looking to book an appointment or do you have a question about our services?"
         return _twiml(reply)
+
+
+# ============ Web Chat API Endpoint ============
+
+class ChatRequest(BaseModel):
+    message: str
+    patient_name: str | None = None
+    phone: str | None = None
+    session_id: str | None = None
+
+
+class ChatResponse(BaseModel):
+    reply: str
+    booked: bool
+
+
+async def process_chat_message(
+    message: str,
+    patient_name: str | None = None,
+    phone: str | None = None,
+    session_id: str | None = None,
+) -> ChatResponse:
+    """Core chat processing logic shared by web widget and WhatsApp."""
+    from_phone = phone or session_id or str(uuid.uuid4())
+
+    patient = state.get(f"web:{from_phone}")
+
+    # Consent is implicit for web chat
+    if not patient["consent"]:
+        patient["consent"] = True
+
+    # Check in-progress booking flow
+    step = patient.get("step")
+    if step:
+        if step == "name":
+            patient["booking"]["name"] = message.strip()
+            patient["step"] = "service"
+            pname = patient["booking"]["name"]
+            reply = (
+                f"Thanks, {pname}! What service or test would you like to book? "
+                "(e.g., General Consultation, Complete Blood Count, Abdominal Ultrasound)"
+            )
+            return ChatResponse(reply=reply, booked=False)
+
+        elif step == "service":
+            patient["booking"]["service"] = message.strip()
+            patient["step"] = "slot"
+            reply = (
+                "Got it! What date and time would you prefer for your appointment? "
+                "(e.g., Tomorrow at 10 AM, 2026-10-20 11:00 AM)"
+            )
+            return ChatResponse(reply=reply, booked=False)
+
+        elif step == "slot":
+            patient["booking"]["slot"] = message.strip()
+            name = patient["booking"]["name"]
+            service = patient["booking"]["service"]
+            slot_str = patient["booking"]["slot"]
+            phone_clean = from_phone.replace("whatsapp:", "").strip()
+
+            slot_dt = _parse_slot_datetime(message.strip())
+            now_iso = datetime.datetime.now(IST).isoformat()
+
+            booking_error = False
+
+            # Create Calendar event
+            try:
+                calendar_service.create_event(
+                    summary=f"{service} - {name}",
+                    start=slot_dt,
+                )
+            except Exception as e:
+                logger.error("Calendar API failed: %s", e)
+                booking_error = True
+
+            # Append to Sheets
+            try:
+                sheets_service.append_row([
+                    now_iso,
+                    name,
+                    phone_clean,
+                    service,
+                    slot_str,
+                    "confirmed" if not booking_error else "pending_manual_review",
+                ])
+            except Exception as e:
+                logger.error("Sheets API failed: %s", e)
+                booking_error = True
+
+            # Reply to patient
+            if not booking_error:
+                reply = (
+                    f"Your appointment for {service} has been confirmed for {slot_str}!\n"
+                    f"Name: {name}\n"
+                    "We look forward to seeing you at Demo Clinic."
+                )
+            else:
+                reply = (
+                    f"Thank you, {name}. We received your booking request for {service} on {slot_str}. "
+                    "Our scheduling system encountered a minor delay, but our team has been notified "
+                    "and will contact you directly to confirm your slot!"
+                )
+
+            patient["booking"] = None
+            patient["step"] = None
+            patient["intent"] = None
+            return ChatResponse(reply=reply, booked=not booking_error)
+
+    # Intent routing
+    try:
+        intent = llm.classify_intent(message)
+    except Exception as e:
+        logger.error("Intent classification failed: %s", e)
+        intent = "unclear"
+
+    if intent == "faq_question":
+        try:
+            answer = llm.answer_faq(message)
+            if answer.strip() == "NOT_IN_FAQ":
+                reply = "Let me connect you with our team on that — they will follow up shortly."
+            else:
+                reply = answer
+        except Exception as e:
+            logger.error("FAQ answering failed: %s", e)
+            reply = "Let me connect you with our team on that — they will follow up shortly."
+        return ChatResponse(reply=reply, booked=False)
+
+    elif intent == "book_appointment":
+        # Try to extract slots from the message
+        extracted = llm.extract_booking_slots(message)
+
+        patient["booking"] = {
+            "phone": f"web:{from_phone}",
+            "name": extracted.get("name"),
+            "service": extracted.get("service"),
+            "slot": extracted.get("slot"),
+        }
+
+        # Check which slots are missing
+        missing = []
+        if not patient["booking"]["name"]:
+            missing.append("name")
+        if not patient["booking"]["service"]:
+            missing.append("service")
+        if not patient["booking"]["slot"]:
+            missing.append("slot")
+
+        if not missing:
+            # All slots present - book directly
+            now_iso = datetime.datetime.now(IST).isoformat()
+            phone_clean = from_phone.replace("web:", "").strip()
+
+            slot_dt = _parse_slot_datetime(patient["booking"]["slot"])
+
+            booking_error = False
+
+            # Create Calendar event
+            try:
+                calendar_service.create_event(
+                    summary=f"{patient['booking']['service']} - {patient['booking']['name']}",
+                    start=slot_dt,
+                )
+            except Exception as e:
+                logger.error("Calendar API failed: %s", e)
+                booking_error = True
+
+            # Append to Sheets
+            try:
+                sheets_service.append_row([
+                    datetime.datetime.now(IST).isoformat(),
+                    patient["booking"]["name"],
+                    phone_clean,
+                    patient["booking"]["service"],
+                    patient["booking"]["slot"],
+                    "confirmed" if not booking_error else "pending_manual_review",
+                ])
+            except Exception as e:
+                logger.error("Sheets API failed: %s", e)
+                booking_error = True
+
+            # Reply to patient
+            if not booking_error:
+                reply = (
+                    f"Your appointment for {patient['booking']['service']} has been confirmed for {patient['booking']['slot']}!\n"
+                    f"Name: {patient['booking']['name']}\n"
+                    "We look forward to seeing you at Demo Clinic."
+                )
+            else:
+                reply = (
+                    f"Thank you, {patient['booking']['name']}. We received your booking request "
+                    f"for {patient['booking']['service']} on {patient['booking']['slot']}. "
+                    "Our scheduling system encountered a minor delay, but our team has been notified "
+                    "and will contact you directly to confirm your slot!"
+                )
+
+            patient["booking"] = None
+            patient["step"] = None
+            patient["intent"] = None
+            return ChatResponse(reply=reply, booked=not booking_error)
+
+        # Some slots missing - continue step-by-step flow
+        patient["step"] = missing[0]
+
+        if patient["booking"]["name"] and not patient["booking"]["service"]:
+            patient["step"] = "service"
+        if patient["booking"]["name"] and patient["booking"]["service"] and not patient["booking"]["slot"]:
+            patient["step"] = "slot"
+
+        if patient["step"] == "name":
+            reply = "I would be glad to help you book an appointment! First, could you please provide your full name?"
+        elif patient["step"] == "service":
+            pname = patient["booking"]["name"]
+            reply = f"Thanks, {pname}! What service or test would you like to book? (e.g., General Consultation, Complete Blood Count, Abdominal Ultrasound)"
+        else:  # slot
+            reply = "Got it! What date and time would you prefer for your appointment? (e.g., Tomorrow at 10 AM, 2026-10-20 11:00 AM)"
+
+        return ChatResponse(reply=reply, booked=False)
+
+    else:
+        reply = "Are you looking to book an appointment or do you have a question about our services?"
+        return ChatResponse(reply=reply, booked=False)
+
+
+@app.post("/chat", response_model=ChatResponse)
+async def chat_endpoint(request: ChatRequest):
+    """Web chat API endpoint for the web widget."""
+    return await process_chat_message(
+        message=request.message,
+        patient_name=request.patient_name,
+        phone=request.phone,
+        session_id=request.session_id,
+    )
+
+
+# ============ Static File Routes ============
+
+@app.get("/book", response_class=HTMLResponse)
+async def book_page():
+    """Direct booking page for Track B clinics."""
+    return FileResponse("static/book.html")
+
+
+@app.get("/demo", response_class=HTMLResponse)
+async def demo_page():
+    """Demo clinic website for Track A clinics."""
+    return FileResponse("static/index.html")
 
 
 if __name__ == "__main__":

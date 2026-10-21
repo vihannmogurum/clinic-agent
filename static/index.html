@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>City Health Clinic - Demo</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #1f2937; background: #f9fafb; }
+        .header { background: #2563eb; color: white; padding: 1rem 2rem; position: sticky; top: 0; z-index: 100; }
+        .header-inner { max-width: 1200px; margin: 0 auto; display: flex; justify-content: space-between; align-items: center; }
+        .logo { font-size: 1.5rem; font-weight: 700; }
+        .nav { display: flex; gap: 2rem; }
+        .nav a { color: white; text-decoration: none; font-weight: 500; padding: 0.5rem 0; }
+        .nav a:hover { text-decoration: underline; }
+        .hero { background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%); color: white; padding: 4rem 2rem; text-align: center; }
+        .hero h1 { font-size: 3rem; margin-bottom: 1rem; max-width: 800px; margin-left: auto; margin-right: auto; }
+        .hero p { font-size: 1.25rem; opacity: 0.9; max-width: 600px; margin-left: auto; margin-right: auto; margin-bottom: 2rem; }
+        .btn { display: inline-block; background: white; color: #2563eb; padding: 1rem 2rem; border-radius: 8px; font-weight: 600; text-decoration: none; font-size: 1.1rem; transition: transform 0.2s, box-shadow 0.2s; }
+        .btn:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0,0,0,0.15); }
+        .features { max-width: 1200px; margin: 4rem auto; padding: 0 2rem; display: grid; grid-template-columns: repeat(3, 1fr); gap: 2rem; }
+        .feature { background: white; padding: 2rem; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); }
+        .feature h3 { color: #2563eb; margin-bottom: 0.5rem; }
+        .feature p { color: #6b7280; }
+        .services { background: #f3f4f6; padding: 4rem 2rem; }
+        .services-inner { max-width: 1200px; margin: 0 auto; }
+        .section-title { text-align: center; font-size: 2rem; color: #1f2937; margin-bottom: 2rem; }
+        .services-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.5rem; }
+        .service-card { background: white; padding: 2rem; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); }
+        .service-card h4 { color: #1f2937; margin-bottom: 0.5rem; }
+        .service-card p { color: #6b7280; font-size: 0.9rem; }
+        .service-card .price { color: #2563eb; font-weight: 700; margin-top: 0.5rem; }
+        .cta { background: #1f2937; color: white; padding: 4rem 2rem; text-align: center; }
+        .cta h2 { font-size: 2rem; margin-bottom: 1rem; }
+        .cta p { opacity: 0.8; margin-bottom: 2rem; max-width: 600px; margin-left: auto; margin-right: auto; }
+        .cta .btn { background: #2563eb; color: white; }
+        .footer { background: #111827; color: #9ca3af; padding: 3rem 2rem; text-align: center; }
+        .footer a { color: #60a5fa; text-decoration: none; }
+        @media (max-width: 768px) {
+            .features { grid-template-columns: 1fr; }
+            .hero h1 { font-size: 2rem; }
+            .nav { display: none; }
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="header-inner">
+            <div class="logo">City Health Clinic</div>
+            <nav class="nav">
+                <a href="#services">Services</a>
+                <a href="#about">About</a>
+                <a href="#contact">Contact</a>
+                <a href="/book" class="btn" style="background: white; color: #2563eb; padding: 0.5rem 1.5rem; border-radius: 6px;">Book Appointment</a>
+            </nav>
+        </div>
+    </header>
+
+    <section class="hero">
+        <h1>Your Health, Our Priority</h1>
+        <p>Expert medical care with seamless online booking. Book appointments, check availability, and get answers instantly through our AI-powered chat.</p>
+        <a href="/book" class="btn">Book an Appointment</a>
+    </section>
+
+    <section class="features">
+        <div class="feature">
+            <h3>🤖 AI-Powered Chat</h3>
+            <p>Get instant answers about services, pricing, and availability 24/7 through our intelligent chat assistant.</p>
+        </div>
+        <div class="feature">
+            <h3>📅 Instant Booking</h3>
+            <p>Book appointments in seconds. Real-time availability with Google Calendar sync.</p>
+        </div>
+        <div class="feature">
+            <h3>📋 Digital Records</h3>
+            <p>Automatic intake forms and visit history stored securely in Google Sheets for your clinic.</p>
+        </div>
+    </section>
+
+    <section id="services" class="services">
+        <div class="services-inner">
+            <h2 class="section-title">Our Services</h2>
+            <div class="services-grid">
+                <div class="service-card">
+                    <h4>General Consultation</h4>
+                    <p>Comprehensive health check-up with our experienced physicians.</p>
+                    <div class="price">₹200</div>
+                </div>
+                <div class="service-card">
+                    <h4>Specialist Consultation</h4>
+                    <p>Cardiology, Endocrinology, and Dermatology specialists available.</p>
+                    <div class="price">₹500</div>
+                </div>
+                <div class="service-card">
+                    <h4>Blood Tests</h4>
+                    <p>Complete blood count, HbA1c, lipid profile, thyroid, and more.</p>
+                    <div class="price">From ₹100</div>
+                </div>
+                <div class="service-card">
+                    <h4>Ultrasound</h4>
+                    <p>Abdominal, obstetric, thyroid, and scrotal ultrasound imaging.</p>
+                    <div class="price">From ₹700</div>
+                </div>
+                <div class="service-card">
+                    <h4>ECG & X-Ray</h4>
+                    <p>12-lead ECG and digital X-ray imaging available same day.</p>
+                    <div class="price">From ₹200</div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="cta">
+        <h2>Ready to Book Your Appointment?</h2>
+        <p>Chat with our AI assistant or click below to book directly. Available 24/7.</p>
+        <a href="/book" class="btn">Book Now</a>
+    </section>
+
+    <footer class="footer">
+        <p>City Health Clinic &copy; 2026 | <a href="#">Privacy Policy</a> | <a href="#">Terms of Service</a></p>
+        <p style="margin-top: 1rem;">123 Health Street, Medical District, Hyderabad 500001 | +91 98765 43210</p>
+    </footer>
+
+    <!-- Embed the chat widget -->
+    <script src="/static/widget.js" data-api-base=""></script>
+</body>
+</html>
