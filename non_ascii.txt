@@ -1,0 +1,17 @@
+Position 8209: byte 226 = â
+Position 8210: byte 152 = 
+Position 8211: byte 128 = 
+Position 8212: byte 239 = ï
+Position 8213: byte 184 = ¸
+Position 8214: byte 143 = 
+Position 8220: byte 240 = ð
+Position 8221: byte 159 = 
+Position 8222: byte 140 = 
+Position 8223: byte 153 = 
+Position 16925: byte 240 = ð
+Position 16926: byte 159 = 
+Position 16927: byte 140 = 
+Position 16928: byte 153 = 
+Position 17335: byte 226 = â
+Position 17336: byte 156 = 
+Position 17337: byte 149 = 

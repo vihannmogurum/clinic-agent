@@ -33,7 +33,8 @@ cp .env.example .env
 ### 4. Run the App
 ```bash
 venv\Scripts\activate
-uvicorn main:app --reload --port 8000
+# Run one backend instance. Stop any older uvicorn/main:app processes first.
+uvicorn main:app --host 127.0.0.1 --port 8000
 ```
 
 ### 5. Test Locally

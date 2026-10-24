@@ -17,9 +17,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, FileResponse
 from pydantic import BaseModel
+from datetime import timezone, timedelta
+
 import uvicorn
 import uuid
-
 import calendar_service
 import llm
 import sheets_service
@@ -60,22 +61,35 @@ app.add_middleware(
 # Mount static files
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+IST = timezone(timedelta(hours=5, minutes=30))
 UNANSWERED_LOG = pathlib.Path(__file__).parent / "data" / "unanswered_questions.log"
 
+
+class SlotResolutionError(RuntimeError):
+    """Raised when the LLM cannot resolve an appointment time."""
+
+
 def _parse_slot_datetime(slot_str: str) -> datetime.datetime:
-    """Parse a natural language or date string into a timezone-aware datetime."""
+    """Resolve an appointment time through the LLM and return an IST datetime."""
     try:
-        from dateutil import parser
-        dt = parser.parse(slot_str, fuzzy=True)
+        resolved_slot = llm.parse_slot_with_llm(slot_str)
+        dt = datetime.datetime.fromisoformat(resolved_slot)
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=IST)
-        return dt
-    except Exception:
-        now = datetime.datetime.now(IST)
-        tomorrow = now + datetime.timedelta(days=1)
-        # Default to 2 PM (14:00) if slot time cannot be parsed
-        return tomorrow.replace(hour=14, minute=0, second=0, microsecond=0)
+            return dt.replace(tzinfo=IST)
+        return dt.astimezone(IST)
+    except Exception as e:
+        logger.warning("LLM slot parsing failed for '%s': %s", slot_str, e)
+        raise SlotResolutionError(
+            "The appointment time could not be resolved by the LLM."
+        ) from e
+
+
+def _format_slot(slot_dt: datetime.datetime) -> str:
+    return slot_dt.strftime("%A, %B %d, %Y at %I:%M %p")
+
+
+def _format_slot_for_sheet(slot_dt: datetime.datetime) -> str:
+    return slot_dt.strftime("%d-%m-%y %I:%M %p")
 
 
 def _log_unanswered_question(phone: str, question: str) -> None:
@@ -97,7 +111,15 @@ def _handle_booking_completion(patient: dict, from_phone: str, IST, now_iso: str
     slot_str = patient["booking"]["slot"]
     phone = from_phone.replace("whatsapp:", "").strip()
 
-    slot_dt = _parse_slot_datetime(slot_str)
+    try:
+        slot_dt = _parse_slot_datetime(slot_str)
+    except SlotResolutionError:
+        patient["step"] = "slot"
+        return _twiml(
+            "I couldn't resolve that date and time. "
+            "Please provide it again, for example: tomorrow at 10 AM."
+        )
+    formatted_slot = _format_slot(slot_dt)
 
     booking_error = False
 
@@ -118,7 +140,7 @@ def _handle_booking_completion(patient: dict, from_phone: str, IST, now_iso: str
             name,
             phone,
             service,
-            slot_str,
+            formatted_slot,
             "confirmed" if not booking_error else "pending_manual_review",
         ])
     except Exception as e:
@@ -127,20 +149,20 @@ def _handle_booking_completion(patient: dict, from_phone: str, IST, now_iso: str
 
     # Alert clinic owner (fire and forget - still async)
     try:
-        whatsapp.send_owner_alert(patient_name=name, service=service, slot=slot_str)
+        whatsapp.send_owner_alert(patient_name=name, service=service, slot=formatted_slot)
     except Exception as e:
         logger.error("Owner alert WhatsApp message failed: %s", e)
 
     # Reply to patient
     if not booking_error:
         reply = (
-            f"Your appointment for {service} has been confirmed for {slot_str}!\n"
+            f"Your appointment for {service} has been confirmed for {formatted_slot}!\n"
             f"Name: {name}\n"
             "We look forward to seeing you at Demo Clinic."
         )
     else:
         reply = (
-            f"Thank you, {name}. We received your booking request for {service} on {slot_str}. "
+            f"Thank you, {name}. We received your booking request for {service} on {formatted_slot}. "
             "Our scheduling system encountered a minor delay, but our team has been notified "
             "and will contact you directly to confirm your slot!"
         )
@@ -210,13 +232,19 @@ async def whatsapp_webhook(request: Request):
             return _twiml(reply)
 
         elif step == "slot":
-            patient["booking"]["slot"] = body.strip()
+            try:
+                slot_dt = _parse_slot_datetime(body.strip())
+            except SlotResolutionError:
+                return _twiml(
+                    "I couldn't resolve that date and time. "
+                    "Please provide it again, for example: tomorrow at 10 AM."
+                )
+            formatted_slot = _format_slot(slot_dt)
+            patient["booking"]["slot"] = formatted_slot
             name = patient["booking"]["name"]
             service = patient["booking"]["service"]
-            slot_str = patient["booking"]["slot"]
             phone = from_phone.replace("whatsapp:", "").strip()
 
-            slot_dt = _parse_slot_datetime(slot_str)
             now_iso = datetime.datetime.now(IST).isoformat()
 
             booking_error = False
@@ -238,7 +266,7 @@ async def whatsapp_webhook(request: Request):
                     name,
                     phone,
                     service,
-                    slot_str,
+                    formatted_slot,
                     "confirmed" if not booking_error else "pending_manual_review",
                 ])
             except Exception as e:
@@ -247,20 +275,20 @@ async def whatsapp_webhook(request: Request):
 
             # Alert clinic owner (fire and forget - still async)
             try:
-                whatsapp.send_owner_alert(patient_name=name, service=service, slot=slot_str)
+                whatsapp.send_owner_alert(patient_name=name, service=service, slot=formatted_slot)
             except Exception as e:
                 logger.error("Owner alert WhatsApp message failed: %s", e)
 
             # Reply to patient
             if not booking_error:
                 reply = (
-                    f"Your appointment for {service} has been confirmed for {slot_str}!\n"
+                    f"Your appointment for {service} has been confirmed for {formatted_slot}!\n"
                     f"Name: {name}\n"
                     "We look forward to seeing you at Demo Clinic."
                 )
             else:
                 reply = (
-                    f"Thank you, {name}. We received your booking request for {service} on {slot_str}. "
+                    f"Thank you, {name}. We received your booking request for {service} on {formatted_slot}. "
                     "Our scheduling system encountered a minor delay, but our team has been notified "
                     "and will contact you directly to confirm your slot!"
                 )
@@ -396,14 +424,24 @@ async def process_chat_message(
             return ChatResponse(reply=reply, booked=False)
 
         elif step == "slot":
-            patient["booking"]["slot"] = message.strip()
+            try:
+                slot_dt = _parse_slot_datetime(message.strip())
+            except SlotResolutionError:
+                return ChatResponse(
+                    reply=(
+                        "I couldn't resolve that date and time. "
+                        "Please provide it again, for example: tomorrow at 10 AM."
+                    ),
+                    booked=False,
+                )
+            formatted_slot = _format_slot(slot_dt)
+            patient["booking"]["slot"] = formatted_slot
             name = patient["booking"]["name"]
             service = patient["booking"]["service"]
-            slot_str = patient["booking"]["slot"]
             phone_clean = from_phone.replace("whatsapp:", "").strip()
 
-            slot_dt = _parse_slot_datetime(message.strip())
             now_iso = datetime.datetime.now(IST).isoformat()
+            sheet_slot = _format_slot_for_sheet(slot_dt)
 
             booking_error = False
 
@@ -424,7 +462,7 @@ async def process_chat_message(
                     name,
                     phone_clean,
                     service,
-                    slot_str,
+                    sheet_slot,
                     "confirmed" if not booking_error else "pending_manual_review",
                 ])
             except Exception as e:
@@ -434,13 +472,13 @@ async def process_chat_message(
             # Reply to patient
             if not booking_error:
                 reply = (
-                    f"Your appointment for {service} has been confirmed for {slot_str}!\n"
+                    f"Your appointment for {service} has been confirmed for {formatted_slot}!\n"
                     f"Name: {name}\n"
                     "We look forward to seeing you at Demo Clinic."
                 )
             else:
                 reply = (
-                    f"Thank you, {name}. We received your booking request for {service} on {slot_str}. "
+                    f"Thank you, {name}. We received your booking request for {service} on {formatted_slot}. "
                     "Our scheduling system encountered a minor delay, but our team has been notified "
                     "and will contact you directly to confirm your slot!"
                 )
@@ -494,9 +532,22 @@ async def process_chat_message(
             now_iso = datetime.datetime.now(IST).isoformat()
             phone_clean = from_phone.replace("web:", "").strip()
 
-            slot_dt = _parse_slot_datetime(patient["booking"]["slot"])
+            try:
+                slot_dt = _parse_slot_datetime(patient["booking"]["slot"])
+            except SlotResolutionError:
+                patient["step"] = "slot"
+                return ChatResponse(
+                    reply=(
+                        "I couldn't resolve that date and time. "
+                        "Please provide it again, for example: tomorrow at 10 AM."
+                    ),
+                    booked=False,
+                )
+            formatted_slot = _format_slot(slot_dt)
+            patient["booking"]["slot"] = formatted_slot
 
             booking_error = False
+            sheet_slot = _format_slot_for_sheet(slot_dt)
 
             # Create Calendar event
             try:
@@ -515,7 +566,7 @@ async def process_chat_message(
                     patient["booking"]["name"],
                     phone_clean,
                     patient["booking"]["service"],
-                    patient["booking"]["slot"],
+                    sheet_slot,
                     "confirmed" if not booking_error else "pending_manual_review",
                 ])
             except Exception as e:
@@ -525,14 +576,14 @@ async def process_chat_message(
             # Reply to patient
             if not booking_error:
                 reply = (
-                    f"Your appointment for {patient['booking']['service']} has been confirmed for {patient['booking']['slot']}!\n"
+                    f"Your appointment for {patient['booking']['service']} has been confirmed for {formatted_slot}!\n"
                     f"Name: {patient['booking']['name']}\n"
                     "We look forward to seeing you at Demo Clinic."
                 )
             else:
                 reply = (
                     f"Thank you, {patient['booking']['name']}. We received your booking request "
-                    f"for {patient['booking']['service']} on {patient['booking']['slot']}. "
+                    f"for {patient['booking']['service']} on {formatted_slot}. "
                     "Our scheduling system encountered a minor delay, but our team has been notified "
                     "and will contact you directly to confirm your slot!"
                 )

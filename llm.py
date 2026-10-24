@@ -5,9 +5,14 @@ FreeLLMAPI / OpenAI-compatible LLM client wrapper with robust fallbacks.
 import json
 import os
 import re
+from datetime import datetime, timedelta, timezone
 from openai import OpenAI
 
+from dotenv import load_dotenv
+load_dotenv(override=True)
+
 MODEL = os.environ.get("FREE_LLM_MODEL", "auto")
+IST = timezone(timedelta(hours=5, minutes=30))
 
 FAQ_PATH = os.path.join(os.path.dirname(__file__), "data", "clinic_faq.md")
 
@@ -30,7 +35,15 @@ FAQ_KEYWORDS = [
 ]
 
 # Words that indicate booking ACTION vs FAQ question
-BOOKING_ACTION_WORDS = ["book", "schedule", "make", "get", "need an appointment", "want an appointment"]
+BOOKING_ACTION_WORDS = [
+    "book",
+    "appointment",
+    "schedule",
+    "make",
+    "get",
+    "need an appointment",
+    "want an appointment",
+]
 
 SERVICE_KEYWORDS = {
     "consultation": "General Consultation",
@@ -64,6 +77,61 @@ def _chat(messages: list, *, json_mode: bool = False, temperature: float = 0.0) 
 
     completion = _client().chat.completions.create(**kwargs)
     return completion.choices[0].message.content
+
+
+def parse_slot_with_llm(user_message: str) -> str:
+    """Resolve a user's appointment time to an ISO 8601 local datetime."""
+    now = datetime.now(IST)
+    tomorrow = now + timedelta(days=1)
+    day_after_tomorrow = now + timedelta(days=2)
+    current_time = now.strftime("%Y-%m-%d %H:%M:%S %Z")
+    context = (
+        f"Current timestamp: {current_time}\n"
+        f"Current weekday: {now.strftime('%A')}\n"
+        f"Tomorrow's date: {tomorrow.strftime('%Y-%m-%d')} "
+        f"({tomorrow.strftime('%A')})\n"
+        f"Day after tomorrow's date: {day_after_tomorrow.strftime('%Y-%m-%d')} "
+        f"({day_after_tomorrow.strftime('%A')})\n\n"
+    )
+    system = (
+        context +
+        "Convert the user's requested appointment time into exactly one ISO 8601 "
+        "local datetime string: YYYY-MM-DDTHH:MM:SS.\n"
+        "Resolve relative dates using the date context above. For example, the "
+        "word 'tomorrow' MUST use Tomorrow's date, never the current date. "
+        "Resolve 'next Monday' to the next calendar Monday after the current date. "
+        "Interpret AM/PM exactly as written: 10 AM means 10:00:00, while 10 PM "
+        "means 22:00:00. If no explicit time is specified, use 10:00:00.\n"
+        "Return ONLY the ISO datetime string. Do not include markdown, timezone "
+        "suffixes, explanation, or any other text."
+    )
+    candidate = _chat(
+        [{"role": "system", "content": system}, {"role": "user", "content": user_message}],
+        temperature=0.0,
+    ).strip().strip("`")
+    datetime.strptime(candidate, "%Y-%m-%dT%H:%M:%S")
+
+    verification_system = (
+        context +
+        "You are the final appointment-time verifier. Compare the user's original "
+        "request with the candidate ISO datetime. Correct the candidate if it has "
+        "the wrong relative date or AM/PM value. In particular, 'tomorrow at 10 AM' "
+        "must resolve to Tomorrow's date at 10:00:00, never today's date and never "
+        "22:00:00. Return ONLY the corrected ISO datetime string in the exact "
+        "format YYYY-MM-DDTHH:MM:SS."
+    )
+    verified = _chat(
+        [
+            {"role": "system", "content": verification_system},
+            {
+                "role": "user",
+                "content": f"Original request: {user_message}\nCandidate: {candidate}",
+            },
+        ],
+        temperature=0.0,
+    ).strip().strip("`")
+    datetime.strptime(verified, "%Y-%m-%dT%H:%M:%S")
+    return verified
 
 
 # ============ Robust Intent Classification ============
@@ -147,26 +215,6 @@ def _regex_extract_slots(message: str) -> dict:
             result["service"] = service
             break
 
-    # Slot/time extraction - extract just the time portion
-    slot_patterns = [
-        (r"today at (\d{1,2}(?::\d{2})?\s*(?:am|pm))", r"today at \1"),
-        (r"tomorrow at (\d{1,2}(?::\d{2})?\s*(?:am|pm))", r"tomorrow at \1"),
-        (r"(\d{1,2}(?::\d{2})?\s*(?:am|pm))\s*(?:today|tomorrow)?", r"\1"),
-        (r"(\d{4}-\d{2}-\d{2}\s+\d{1,2}(?::\d{2})?(?:\s*(?:am|pm))?)", r"\1"),
-    ]
-
-    for pattern, replacement in slot_patterns:
-        match = re.search(pattern, message, re.IGNORECASE)
-        if match:
-            # Extract just the matched time portion
-            result["slot"] = match.group(1) if match.groups() else match.group(0)
-            # If it's just a time, prepend today/tomorrow context
-            if "today" in message.lower() and "tomorrow" not in result["slot"].lower():
-                result["slot"] = "today at " + result["slot"]
-            elif "tomorrow" in message.lower() and "tomorrow" not in result["slot"].lower():
-                result["slot"] = "tomorrow at " + result["slot"]
-            break
-
     # Name extraction
     name_match = re.search(r"name is\s+([A-Za-z\s]+)", message, re.IGNORECASE)
     if name_match:
@@ -186,9 +234,9 @@ def extract_booking_slots(message: str) -> dict:
     1. Regex-based (instant, reliable for common patterns)
     2. LLM fallback (if regex misses something)
     """
-    # Layer 1: Regex-based (instant, reliable for common patterns)
+    # Extract stable fields locally, then let the LLM handle appointment dates.
     regex_result = _regex_extract_slots(message)
-    if regex_result:
+    if "slot" in regex_result:
         return regex_result
 
     # Layer 2: LLM fallback
@@ -211,7 +259,8 @@ def extract_booking_slots(message: str) -> dict:
                 temperature=0.0,
             )
             data = json.loads(raw)
-            return {k: v for k, v in data.items() if v is not None}
+            extracted = {k: v for k, v in data.items() if v is not None}
+            return {**regex_result, **extracted}
         except Exception:
             continue
 
