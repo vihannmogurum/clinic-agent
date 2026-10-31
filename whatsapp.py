@@ -1,84 +1,87 @@
-"""
-Twilio WhatsApp client wrapper.
+﻿"""Meta WhatsApp Cloud API integration."""
 
-Handles both directions:
-- INCOMING: parse the form-encoded POST body that Twilio's WhatsApp Sandbox
-  sends to our webhook (we only need the `Body`, `From`, and `MessageSid`
-  fields).
-- OUTGOING: send a reply message back to the same number the message came
-  from, plus a separate alert message to the clinic owner.
-
-PONYTAIL: incoming webhook signature validation (X-Twilio-Signature) is
-intentionally skipped for this prototype. It is one extra dependency and one
-extra place for a misconfigured auth token to break the demo. Re-add it before
-production: validate the signature against TWILIO_AUTH_TOKEN and reject
-unsigned requests.
-"""
-
+import json
 import os
+from urllib import request
 
-from twilio.rest import Client
+import logging
+import urllib.error
+from dotenv import load_dotenv
 
-# Twilio WhatsApp Sandbox uses "+1 415 526 8675" as the sandbox number; the
-# `from_` value we send with must match the sandbox number Twilio assigned us.
-# Read it from env so the same code works after the sandbox number is issued.
-# Use os.getenv to avoid KeyError at import time if .env not loaded yet.
-TWILIO_WHATSAPP_NUMBER = os.getenv("TWILIO_WHATSAPP_NUMBER", "whatsapp:+14155268675")
+load_dotenv(override=True)
+
+logger = logging.getLogger(__name__)
+
+GRAPH_API_VERSION = "v21.0"
 
 
-def parse_incoming(form_data: dict) -> dict:
-    """
-    Extract the fields we care about from a Twilio webhook POST body.
+def parse_meta_incoming(payload: dict) -> dict:
+    """Extract a text message from a Meta WhatsApp webhook payload."""
+    try:
+        value = payload["entry"][0]["changes"][0]["value"]
+        messages = value.get("messages") or []
+        if not messages:
+            return {"from_phone": None, "body": None}
 
-    Twilio sends everything as form-encoded strings, so `Body` may arrive as
-    a list if the same key is repeated (Twilio does this for media). We take
-    the first value.
-    """
-    body = form_data.get("Body")
-    if isinstance(body, list):
-        body = body[0] if body else ""
+        message = messages[0]
+        if message.get("type") != "text":
+            return {"from_phone": None, "body": None}
 
-    return {
-        "body": (body or "").strip(),
-        "from_phone": (form_data.get("From") or "").strip(),
-        "message_sid": (form_data.get("MessageSid") or "").strip(),
+        phone = (message.get("from") or "").strip()
+        body = ((message.get("text") or {}).get("body") or "").strip()
+        if not phone or not body:
+            return {"from_phone": None, "body": None}
+        return {"from_phone": phone, "body": body}
+    except (KeyError, IndexError, TypeError, AttributeError):
+        return {"from_phone": None, "body": None}
+
+
+def send_whatsapp_message(to_phone: str, text: str) -> bool:
+    """Send a text message through the Meta WhatsApp Cloud API."""
+    if not text:
+        logger.error("send_whatsapp_message aborted: text body is empty or None")
+        return False
+
+    token = (os.environ.get("META_WA_TOKEN") or "").strip().strip("'\"")
+    if token.lower().startswith("bearer "):
+        token = token[7:].strip()
+    phone_number_id = (os.environ.get("META_WA_PHONE_NUMBER_ID") or "").strip().strip("'\"")
+    url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{phone_number_id}/messages"
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to_phone,
+        "type": "text",
+        "text": {"body": text},
     }
-
-
-def _client() -> Client:
-    """Build a Twilio client from the account SID and auth token in env."""
-    return Client(
-        os.environ["TWILIO_ACCOUNT_SID"],
-        os.environ["TWILIO_AUTH_TOKEN"],
+    body = json.dumps(payload).encode("utf-8")
+    req = request.Request(
+        url,
+        data=body,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
     )
+    try:
+        with request.urlopen(req, timeout=15) as response:
+            return 200 <= response.status < 300
+    except urllib.error.HTTPError as e:
+        error_body = e.read().decode("utf-8", errors="replace")
+        logger.error(f"Meta Graph API error ({e.code}): {error_body}")
+        return False
+    except Exception as e:
+        logger.error(f"Failed to send request: {e}")
+        return False
 
 
-def send_message(to: str, text: str) -> str:
-    """
-    Send a WhatsApp message to `to` (e.g. "whatsapp:+919876543210").
-
-    Returns the Twilio message SID. Raises on failure — callers are expected
-    to catch and fall back gracefully.
-    """
-    message = _client().messages.create(
-        from_=TWILIO_WHATSAPP_NUMBER,
-        to=to,
-        body=text,
-    )
-    return message.sid
-
-
-def send_owner_alert(patient_name: str, service: str, slot: str) -> str:
-    """
-    Send the clinic owner a short WhatsApp alert about a new booking.
-
-    `OWNER_WHATSAPP_NUMBER` is read from env so it can change without a redeploy.
-    """
-    owner_number = os.environ["OWNER_WHATSAPP_NUMBER"]
+def send_owner_alert(patient_name: str, service: str, slot: str) -> bool:
+    """Send a booking alert to the clinic owner."""
+    owner_phone = os.environ["OWNER_PHONE"]
     text = (
-        f"New appointment booked at Demo Clinic.\n"
+        "New appointment booked at Demo Clinic.\n"
         f"Patient: {patient_name}\n"
         f"Service: {service}\n"
         f"Slot: {slot}"
     )
-    return send_message(owner_number, text)
+    return send_whatsapp_message(owner_phone, text)

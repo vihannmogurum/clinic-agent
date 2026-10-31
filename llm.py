@@ -11,6 +11,12 @@ from openai import OpenAI
 from dotenv import load_dotenv
 load_dotenv(override=True)
 
+import logging
+
+# Configure basic logging if not already configured
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 MODEL = os.environ.get("FREE_LLM_MODEL", "auto")
 IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -59,10 +65,20 @@ SERVICE_KEYWORDS = {
 
 # ============ LLM Client ============
 
+def _llm_base_url() -> str:
+    base_url = (os.environ.get("FREE_LLM_BASE_URL") or "").strip().strip("'\"")
+    if not base_url:
+        base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
+    if base_url.rstrip("/") == "http://localhost:3001":
+        logger.warning("FREE_LLM_BASE_URL points to localhost:3001; using the FreeLLMAPI endpoint")
+        base_url = "https://api.freellmapi.com/v1"
+    return base_url
+
+
 def _client() -> OpenAI:
     return OpenAI(
         api_key=os.environ["FREE_LLM_API_KEY"],
-        base_url=os.environ.get("FREE_LLM_BASE_URL", "https://api.freellmapi.com/v1"),
+        base_url=_llm_base_url(),
     )
 
 
@@ -75,8 +91,13 @@ def _chat(messages: list, *, json_mode: bool = False, temperature: float = 0.0) 
     if json_mode:
         kwargs["response_format"] = {"type": "json_object"}
 
-    completion = _client().chat.completions.create(**kwargs)
-    return completion.choices[0].message.content
+    client = _client()
+    try:
+        completion = client.chat.completions.create(**kwargs)
+        return completion.choices[0].message.content
+    except Exception as e:
+        logger.error("LLM request failed at %s: %s", client.base_url, e)
+        raise
 
 
 def parse_slot_with_llm(user_message: str) -> str:
@@ -105,10 +126,14 @@ def parse_slot_with_llm(user_message: str) -> str:
         "Return ONLY the ISO datetime string. Do not include markdown, timezone "
         "suffixes, explanation, or any other text."
     )
-    candidate = _chat(
-        [{"role": "system", "content": system}, {"role": "user", "content": user_message}],
-        temperature=0.0,
-    ).strip().strip("`")
+    try:
+        candidate = _chat(
+            [{"role": "system", "content": system}, {"role": "user", "content": user_message}],
+            temperature=0.0,
+        ).strip().strip("`")
+    except Exception as e:
+        logger.error("parse_slot_with_llm failed at %s: %s", _llm_base_url(), e)
+        raise
     datetime.strptime(candidate, "%Y-%m-%dT%H:%M:%S")
 
     verification_system = (
@@ -120,16 +145,20 @@ def parse_slot_with_llm(user_message: str) -> str:
         "22:00:00. Return ONLY the corrected ISO datetime string in the exact "
         "format YYYY-MM-DDTHH:MM:SS."
     )
-    verified = _chat(
-        [
-            {"role": "system", "content": verification_system},
-            {
-                "role": "user",
-                "content": f"Original request: {user_message}\nCandidate: {candidate}",
-            },
-        ],
-        temperature=0.0,
-    ).strip().strip("`")
+    try:
+        verified = _chat(
+            [
+                {"role": "system", "content": verification_system},
+                {
+                    "role": "user",
+                    "content": f"Original request: {user_message}\nCandidate: {candidate}",
+                },
+            ],
+            temperature=0.0,
+        ).strip().strip("`")
+    except Exception as e:
+        logger.error("parse_slot_with_llm verification failed at %s: %s", _llm_base_url(), e)
+        raise
     datetime.strptime(verified, "%Y-%m-%dT%H:%M:%S")
     return verified
 
@@ -195,7 +224,8 @@ def classify_intent(message: str) -> str:
             intent = data.get("intent", "unclear")
             if intent in ("faq_question", "book_appointment", "unclear"):
                 return intent
-        except Exception:
+        except Exception as e:
+            logger.error("classify_intent attempt %d failed at %s: %s", attempt + 1, _llm_base_url(), e)
             continue  # Retry
 
     # Final fallback
@@ -261,7 +291,8 @@ def extract_booking_slots(message: str) -> dict:
             data = json.loads(raw)
             extracted = {k: v for k, v in data.items() if v is not None}
             return {**regex_result, **extracted}
-        except Exception:
+        except Exception as e:
+            logger.error("extract_booking_slots attempt %d failed at %s: %s", attempt + 1, _llm_base_url(), e)
             continue
 
     return {}

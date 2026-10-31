@@ -19,13 +19,21 @@ class TestClinicAgent(unittest.TestCase):
         # Clear in-memory state before each test
         main.state.STATE.clear()
 
-    @patch("whatsapp.send_message")
+    @patch("whatsapp.send_whatsapp_message", return_value=True)
     def test_consent_flow(self, mock_send):
         # 1. First message without consent -> receives consent prompt
-        response = client.post("/webhook/whatsapp", data={
-            "From": "whatsapp:+919876543210",
-            "Body": "Hi, I want to know about pricing",
-            "MessageSid": "SM12345"
+        response = client.post("/webhook/whatsapp", json={
+            "entry": [{
+                "changes": [{
+                    "value": {
+                        "messages": [{
+                            "from": "919876543210",
+                            "type": "text",
+                            "text": {"body": "Hi, I want to know about pricing"},
+                        }]
+                    }
+                }]
+            }]
         })
         self.assertEqual(response.status_code, 200)
         mock_send.assert_called_once()
@@ -34,10 +42,18 @@ class TestClinicAgent(unittest.TestCase):
 
         # 2. Reply YES -> receives welcome / help prompt
         mock_send.reset_mock()
-        response = client.post("/webhook/whatsapp", data={
-            "From": "whatsapp:+919876543210",
-            "Body": "YES",
-            "MessageSid": "SM12346"
+        response = client.post("/webhook/whatsapp", json={
+            "entry": [{
+                "changes": [{
+                    "value": {
+                        "messages": [{
+                            "from": "919876543210",
+                            "type": "text",
+                            "text": {"body": "YES"},
+                        }]
+                    }
+                }]
+            }]
         })
         self.assertEqual(response.status_code, 200)
         mock_send.assert_called_once()
@@ -56,7 +72,7 @@ class TestClinicAgent(unittest.TestCase):
         "llm._chat",
         return_value="NOT_IN_FAQ"
     )
-    @patch("whatsapp.send_message")
+    @patch("whatsapp.send_whatsapp_message", return_value=True)
     def test_faq_out_of_bounds_returns_fallback(self, mock_send, mock_chat):
         # When FAQ doesn't have the answer, agent returns NOT_IN_FAQ marker
         answer = llm.answer_faq("Do you perform open-heart surgery?")

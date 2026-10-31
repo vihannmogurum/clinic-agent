@@ -1,18 +1,18 @@
 """
 Demo Clinic WhatsApp Patient Intake & Appointment Agent.
 
-FastAPI entrypoint and Twilio WhatsApp webhook handler.
+FastAPI entrypoint and Meta WhatsApp Cloud API webhook handler.
 """
 
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(override=True)
 
 import datetime
 import logging
 import os
 import pathlib
 
-from fastapi import FastAPI, Request, Response, Body, Depends
+from fastapi import FastAPI, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, FileResponse
@@ -27,19 +27,6 @@ import sheets_service
 import state
 import whatsapp
 
-
-def _twiml(message: str) -> Response:
-    """Return a TwiML XML response containing the given message."""
-    # Escape XML special characters
-    escaped = (
-        message.replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
-        .replace("'", "&apos;")
-    )
-    xml = f"<Response><Message>{escaped}</Message></Response>"
-    return Response(content=xml, media_type="application/xml")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -63,6 +50,14 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 IST = timezone(timedelta(hours=5, minutes=30))
 UNANSWERED_LOG = pathlib.Path(__file__).parent / "data" / "unanswered_questions.log"
+META_WA_VERIFY_TOKEN = os.getenv("META_WA_VERIFY_TOKEN", "clinic_verify_secret")
+
+
+def _send_whatsapp_reply(to_phone: str, text: str) -> Response:
+    logger.info("Attempting outbound WhatsApp message to %s: %r", to_phone, text)
+    if not whatsapp.send_whatsapp_message(to_phone, text):
+        logger.error("Failed to send WhatsApp message to %s", to_phone)
+    return Response(content="OK", status_code=200)
 
 
 class SlotResolutionError(RuntimeError):
@@ -104,7 +99,7 @@ def _log_unanswered_question(phone: str, question: str) -> None:
 
 
 def _handle_booking_completion(patient: dict, from_phone: str, IST, now_iso: str,
-                                calendar_service, sheets_service, whatsapp, logger, _twiml):
+                                calendar_service, sheets_service, whatsapp, logger):
     """Complete the booking when all slots are filled."""
     name = patient["booking"]["name"]
     service = patient["booking"]["service"]
@@ -115,7 +110,8 @@ def _handle_booking_completion(patient: dict, from_phone: str, IST, now_iso: str
         slot_dt = _parse_slot_datetime(slot_str)
     except SlotResolutionError:
         patient["step"] = "slot"
-        return _twiml(
+        return _send_whatsapp_reply(
+            from_phone,
             "I couldn't resolve that date and time. "
             "Please provide it again, for example: tomorrow at 10 AM."
         )
@@ -170,7 +166,7 @@ def _handle_booking_completion(patient: dict, from_phone: str, IST, now_iso: str
     patient["booking"] = None
     patient["step"] = None
     patient["intent"] = None
-    return _twiml(reply)
+    return _send_whatsapp_reply(from_phone, reply)
 
 
 @app.get("/")
@@ -178,19 +174,31 @@ async def health_check():
     return {"status": "ok", "clinic": "Demo Clinic"}
 
 
+@app.get("/webhook/whatsapp")
+async def verify_whatsapp_webhook(
+    hub_mode: str | None = Query(None, alias="hub.mode"),
+    hub_verify_token: str | None = Query(None, alias="hub.verify_token"),
+    hub_challenge: str | None = Query(None, alias="hub.challenge"),
+):
+    if (
+        hub_mode == "subscribe"
+        and hub_verify_token == META_WA_VERIFY_TOKEN
+        and hub_challenge is not None
+    ):
+        return Response(content=hub_challenge, media_type="text/plain")
+    return Response(content="Forbidden", status_code=403)
+
+
 @app.post("/webhook/whatsapp")
 async def whatsapp_webhook(request: Request):
-    """
-    Twilio WhatsApp incoming message webhook handler.
-    Returns TwiML with the agent's reply inline (synchronous).
-    """
-    form_data = await request.form()
-    parsed = whatsapp.parse_incoming(dict(form_data))
+    """Handle Meta WhatsApp Cloud API webhook events."""
+    payload = await request.json()
+    parsed = whatsapp.parse_meta_incoming(payload)
     body = parsed["body"]
     from_phone = parsed["from_phone"]
 
-    if not from_phone:
-        return _twiml("")
+    if not from_phone or not body:
+        return Response(content="OK", status_code=200)
 
     patient = state.get(from_phone)
 
@@ -207,7 +215,7 @@ async def whatsapp_webhook(request: Request):
                 "Hi! Before we proceed, please confirm you agree to share your "
                 "details with Demo Clinic for appointment purposes. Reply YES to continue."
             )
-        return _twiml(reply)
+        return _send_whatsapp_reply(from_phone, reply)
 
     # 2. In-progress booking flow
     step = patient.get("step")
@@ -220,7 +228,7 @@ async def whatsapp_webhook(request: Request):
                 f"Thanks, {pname}! What service or test would you like to book? "
                 "(e.g., General Consultation, Complete Blood Count, Abdominal Ultrasound)"
             )
-            return _twiml(reply)
+            return _send_whatsapp_reply(from_phone, reply)
 
         elif step == "service":
             patient["booking"]["service"] = body.strip()
@@ -229,13 +237,14 @@ async def whatsapp_webhook(request: Request):
                 "Got it! What date and time would you prefer for your appointment? "
                 "(e.g., Tomorrow at 10 AM, 2026-10-20 11:00 AM)"
             )
-            return _twiml(reply)
+            return _send_whatsapp_reply(from_phone, reply)
 
         elif step == "slot":
             try:
                 slot_dt = _parse_slot_datetime(body.strip())
             except SlotResolutionError:
-                return _twiml(
+                return _send_whatsapp_reply(
+                    from_phone,
                     "I couldn't resolve that date and time. "
                     "Please provide it again, for example: tomorrow at 10 AM."
                 )
@@ -296,7 +305,7 @@ async def whatsapp_webhook(request: Request):
             patient["booking"] = None
             patient["step"] = None
             patient["intent"] = None
-            return _twiml(reply)
+            return _send_whatsapp_reply(from_phone, reply)
 
     # 3. Intent routing
     try:
@@ -320,7 +329,7 @@ async def whatsapp_webhook(request: Request):
             reply = "Let me connect you with our team on that — they will follow up shortly."
             _log_unanswered_question(from_phone, body)
 
-        return _twiml(reply)
+        return _send_whatsapp_reply(from_phone, reply)
 
     elif intent == "book_appointment":
         # Try to extract slots from the message in a single turn
@@ -345,7 +354,7 @@ async def whatsapp_webhook(request: Request):
         if not missing:
             # All slots present - book directly
             now_iso = datetime.datetime.now(IST).isoformat()
-            return _handle_booking_completion(patient, from_phone, IST, now_iso, calendar_service, sheets_service, whatsapp, logger, _twiml)
+            return _handle_booking_completion(patient, from_phone, IST, now_iso, calendar_service, sheets_service, whatsapp, logger)
 
         # Some slots missing - continue step-by-step flow
         patient["step"] = missing[0]
@@ -365,11 +374,11 @@ async def whatsapp_webhook(request: Request):
         else:  # slot
             reply = "Got it! What date and time would you prefer for your appointment? (e.g., Tomorrow at 10 AM, 2026-10-20 11:00 AM)"
 
-        return _twiml(reply)
+        return _send_whatsapp_reply(from_phone, reply)
 
     else:
         reply = "Are you looking to book an appointment or do you have a question about our services?"
-        return _twiml(reply)
+        return _send_whatsapp_reply(from_phone, reply)
 
 
 # ============ Web Chat API Endpoint ============
@@ -639,6 +648,37 @@ async def book_page():
 async def demo_page():
     """Demo clinic website for Track A clinics."""
     return FileResponse("static/index.html")
+
+
+@app.get("/privacy", response_class=HTMLResponse)
+async def privacy_policy():
+    return """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Clinic Agent - Privacy Policy</title>
+        <style>
+            body { font-family: system-ui, -apple-system, sans-serif; line-height: 1.6; max-width: 760px; margin: 40px auto; padding: 0 20px; color: #1e293b; background: #f8fafc; }
+            h1, h2 { color: #0f172a; }
+            hr { border: 0; border-top: 1px solid #e2e8f0; margin: 24px 0; }
+        </style>
+    </head>
+    <body>
+        <h1>Privacy Policy</h1>
+        <p><strong>Effective Date:</strong> October 2026</p>
+        <p>This Clinic Appointment Booking Service facilitates automated appointment scheduling through our WhatsApp integration and web booking widgets.</p>
+        <hr>
+        <h2>1. Information We Collect</h2>
+        <p>We only process data required to coordinate your clinic visit: patient name, contact number, requested appointment date/time, and basic consultation type.</p>
+        <h2>2. How Data Is Used</h2>
+        <p>Your details are strictly used to schedule calendar slots, generate clinic visit records, and deliver appointment confirmations or reminder messages. We do not sell, rent, or monetize personal information.</p>
+        <h2>3. Data Retention & Deletion</h2>
+        <p>Patients can request the immediate removal of their booking records and personal details at any time by contacting clinic administration or messaging our support line.</p>
+    </body>
+    </html>
+    """
 
 
 if __name__ == "__main__":

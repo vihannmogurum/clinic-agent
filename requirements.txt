@@ -1,6 +1,5 @@
 fastapi>=0.110
 uvicorn[standard]>=0.29
-twilio>=9.0
 groq>=0.9
 google-api-python-client>=2.100
 google-auth>=2.20

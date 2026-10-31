@@ -16,10 +16,10 @@ pip install -r requirements.txt
 ```bash
 cp .env.example .env
 # Edit .env with your credentials:
-# - Twilio: TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_WHATSAPP_NUMBER
+# - Meta WhatsApp: META_WA_TOKEN, META_WA_PHONE_NUMBER_ID, META_WA_VERIFY_TOKEN
 # - FreeLLMAPI: FREE_LLM_API_KEY, FREE_LLM_BASE_URL
 # - Google: GOOGLE_CREDENTIALS_PATH, GOOGLE_CALENDAR_ID, SHEET_ID
-# - Clinic: OWNER_WHATSAPP_NUMBER
+# - Clinic: OWNER_PHONE
 ```
 
 ### 3. Google Cloud Setup
@@ -51,14 +51,14 @@ curl -X POST http://127.0.0.1:8000/chat \
   -d '{"message": "I want to book a General Consultation for today at 3 PM, name is John", "session_id": "test"}'
 ```
 
-### 6. Twilio WhatsApp (Optional)
-```bash
-# Start ngrok tunnel
-ngrok http 8000
+### 6. Meta WhatsApp Cloud API (Optional)
+Expose the app through HTTPS (for example with a tunnel), then configure the
+Meta webhook URL as `https://<public-host>/webhook/whatsapp` with:
 
-# Configure Twilio Sandbox webhook:
-# POST https://<ngrok-url>/webhook/whatsapp
-```
+- Verify token matching `META_WA_VERIFY_TOKEN`
+- `messages` webhook subscription
+
+Set `META_WA_TOKEN`, `META_WA_PHONE_NUMBER_ID`, and `OWNER_PHONE` in `.env`.
 
 ## Project Structure
 ```
@@ -67,7 +67,7 @@ clinic-agent/
 ├── llm.py                  # LLM client with robust fallbacks
 ├── calendar_service.py     # Google Calendar API wrapper
 ├── sheets_service.py       # Google Sheets API wrapper
-├── whatsapp.py             # Twilio WhatsApp wrapper
+├── whatsapp.py             # Meta WhatsApp Cloud API wrapper
 ├── state.py                # In-memory conversation state
 ├── requirements.txt
 ├── .env.example
@@ -83,7 +83,7 @@ clinic-agent/
 ```
 
 ## Features
-- **WhatsApp + Web chat** via `/webhook/whatsapp` and `/chat` endpoints
+- **Meta WhatsApp Cloud API + Web chat** via `/webhook/whatsapp` and `/chat` endpoints
 - **Single-turn booking**: "I want to book a General Consultation for today at 3 PM, name is John"
 - **Multi-step booking**: Step-by-step name → service → slot collection
 - **FAQ answering**: Pricing, hours, prep instructions from `data/clinic_faq.md`
