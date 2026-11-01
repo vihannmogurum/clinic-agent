@@ -21,19 +21,20 @@ def parse_meta_incoming(payload: dict) -> dict:
         value = payload["entry"][0]["changes"][0]["value"]
         messages = value.get("messages") or []
         if not messages:
-            return {"from_phone": None, "body": None}
+            return {"from_phone": None, "body": None, "message_id": None}
 
         message = messages[0]
+        message_id = message.get("id")
         if message.get("type") != "text":
-            return {"from_phone": None, "body": None}
+            return {"from_phone": None, "body": None, "message_id": message_id}
 
         phone = (message.get("from") or "").strip()
         body = ((message.get("text") or {}).get("body") or "").strip()
         if not phone or not body:
-            return {"from_phone": None, "body": None}
-        return {"from_phone": phone, "body": body}
+            return {"from_phone": None, "body": None, "message_id": message_id}
+        return {"from_phone": phone, "body": body, "message_id": message_id}
     except (KeyError, IndexError, TypeError, AttributeError):
-        return {"from_phone": None, "body": None}
+        return {"from_phone": None, "body": None, "message_id": None}
 
 
 def send_whatsapp_message(to_phone: str, text: str) -> bool:
@@ -75,9 +76,24 @@ def send_whatsapp_message(to_phone: str, text: str) -> bool:
         return False
 
 
-def send_owner_alert(patient_name: str, service: str, slot: str) -> bool:
+def send_owner_alert(
+    patient_name: str,
+    service: str,
+    slot: str,
+    exclude_phone: str | None = None,
+) -> bool:
     """Send a booking alert to the clinic owner."""
-    owner_phone = os.environ["OWNER_PHONE"]
+    owner_phone = (os.environ.get("OWNER_PHONE") or "").strip().lstrip("+")
+    excluded_phone = (exclude_phone or "").strip().lstrip("+")
+    if owner_phone and owner_phone == excluded_phone:
+        logger.error(
+            "Owner alert aborted: OWNER_PHONE matches the patient phone; "
+            "configure a separate admin recipient"
+        )
+        return False
+    if not owner_phone:
+        logger.error("Owner alert aborted: OWNER_PHONE is not configured")
+        return False
     text = (
         "New appointment booked at Demo Clinic.\n"
         f"Patient: {patient_name}\n"

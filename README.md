@@ -60,6 +60,15 @@ Meta webhook URL as `https://<public-host>/webhook/whatsapp` with:
 
 Set `META_WA_TOKEN`, `META_WA_PHONE_NUMBER_ID`, and `OWNER_PHONE` in `.env`.
 
+### Google Sheets scheduling setup
+
+1. Enable Google Sheets API and Google Drive API in the Google Cloud project.
+2. Save the downloaded service-account key as `service_account.json` in the repository root.
+3. Set `GOOGLE_SHEET_ID` and `GOOGLE_APPLICATION_CREDENTIALS=service_account.json` in `.env`.
+4. Share the spreadsheet with the JSON key's `client_email` as an Editor.
+5. Run `.\venv\Scripts\python.exe init_sheets.py` to create the five worksheet tabs.
+6. Fill the reference tabs before accepting bookings; reference tabs refresh within 60 seconds.
+
 ## Project Structure
 ```
 clinic-agent/
@@ -67,8 +76,11 @@ clinic-agent/
 ├── llm.py                  # LLM client with robust fallbacks
 ├── calendar_service.py     # Google Calendar API wrapper
 ├── sheets_service.py       # Google Sheets API wrapper
+├── appointment_store.py    # Live Google Sheets scheduling repository
+├── init_sheets.py          # Worksheet/tab initialization command
 ├── whatsapp.py             # Meta WhatsApp Cloud API wrapper
-├── state.py                # In-memory conversation state
+├── appointment_store.py    # SQLite reference data and appointment ledger
+├── state.py                # In-memory conversation/session state
 ├── requirements.txt
 ├── .env.example
 ├── data/
@@ -84,8 +96,12 @@ clinic-agent/
 
 ## Features
 - **Meta WhatsApp Cloud API + Web chat** via `/webhook/whatsapp` and `/chat` endpoints
-- **Single-turn booking**: "I want to book a General Consultation for today at 3 PM, name is John"
 - **Multi-step booking**: Step-by-step name → service → slot collection
+- **Durable scheduling ledger**: SQLite Doctors, Services, Hospital Hours, Beds, and Appointments tables
+- **Availability validation**: Clinic hours, doctor shifts, service fees, and confirmed-slot collision checks
+- **Confirmed cancellation and rescheduling** with Calendar event updates
+- **Live Google Sheets scheduling data** with 60-second reference-data caching
+- **Live clinic-data Q&A** for beds, doctors, services/prices, and hospital hours
 - **FAQ answering**: Pricing, hours, prep instructions from `data/clinic_faq.md`
 - **Google Calendar** integration with IST timezone (correct 9 AM, 3 PM, etc.)
 - **Google Sheets** intake logging
@@ -98,5 +114,5 @@ clinic-agent/
 - FastAPI + Uvicorn
 - FreeLLMAPI (OpenAI-compatible) via `openai` SDK
 - Google Calendar API v3 + Sheets API v4
-- Twilio WhatsApp Sandbox
+- Meta WhatsApp Cloud API
 - Vanilla JS widget (zero dependencies)

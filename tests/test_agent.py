@@ -78,5 +78,33 @@ class TestClinicAgent(unittest.TestCase):
         answer = llm.answer_faq("Do you perform open-heart surgery?")
         self.assertEqual(answer.strip(), "NOT_IN_FAQ")
 
+    @patch("llm.classify_intent", return_value="book_appointment")
+    @patch("whatsapp.send_whatsapp_message", return_value=True)
+    def test_duplicate_meta_message_is_processed_once(self, mock_send, mock_intent):
+        phone = "919876543210"
+        main.state.get(phone)["consent"] = True
+        payload = {
+            "entry": [{
+                "changes": [{
+                    "value": {
+                        "messages": [{
+                            "id": "wamid.booking-start",
+                            "from": phone,
+                            "type": "text",
+                            "text": {"body": "book an appointment"},
+                        }]
+                    }
+                }]
+            }]
+        }
+
+        first = client.post("/webhook/whatsapp", json=payload)
+        second = client.post("/webhook/whatsapp", json=payload)
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+        mock_send.assert_called_once()
+        self.assertEqual(main.state.get(phone)["step"], main.AWAITING_NAME)
+
 if __name__ == "__main__":
     unittest.main()

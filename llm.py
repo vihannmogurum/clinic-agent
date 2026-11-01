@@ -68,7 +68,7 @@ SERVICE_KEYWORDS = {
 def _llm_base_url() -> str:
     base_url = (os.environ.get("FREE_LLM_BASE_URL") or "").strip().strip("'\"")
     if not base_url:
-        base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
+        base_url = "https://api.freellmapi.com/v1"
     if base_url.rstrip("/") == "http://localhost:3001":
         logger.warning("FREE_LLM_BASE_URL points to localhost:3001; using the FreeLLMAPI endpoint")
         base_url = "https://api.freellmapi.com/v1"
@@ -102,6 +102,7 @@ def _chat(messages: list, *, json_mode: bool = False, temperature: float = 0.0) 
 
 def parse_slot_with_llm(user_message: str) -> str:
     """Resolve a user's appointment time to an ISO 8601 local datetime."""
+    user_message = user_message.strip()
     now = datetime.now(IST)
     tomorrow = now + timedelta(days=1)
     day_after_tomorrow = now + timedelta(days=2)
@@ -122,7 +123,8 @@ def parse_slot_with_llm(user_message: str) -> str:
         "word 'tomorrow' MUST use Tomorrow's date, never the current date. "
         "Resolve 'next Monday' to the next calendar Monday after the current date. "
         "Interpret AM/PM exactly as written: 10 AM means 10:00:00, while 10 PM "
-        "means 22:00:00. If no explicit time is specified, use 10:00:00.\n"
+        "means 22:00:00. Treat capitalization in dates, weekdays, and AM/PM "
+        "markers as irrelevant. If no explicit time is specified, use 10:00:00.\n"
         "Return ONLY the ISO datetime string. Do not include markdown, timezone "
         "suffixes, explanation, or any other text."
     )
@@ -130,7 +132,7 @@ def parse_slot_with_llm(user_message: str) -> str:
         candidate = _chat(
             [{"role": "system", "content": system}, {"role": "user", "content": user_message}],
             temperature=0.0,
-        ).strip().strip("`")
+        ).strip().strip("`\"'")
     except Exception as e:
         logger.error("parse_slot_with_llm failed at %s: %s", _llm_base_url(), e)
         raise
@@ -155,7 +157,7 @@ def parse_slot_with_llm(user_message: str) -> str:
                 },
             ],
             temperature=0.0,
-        ).strip().strip("`")
+        ).strip().strip("`\"'")
     except Exception as e:
         logger.error("parse_slot_with_llm verification failed at %s: %s", _llm_base_url(), e)
         raise
@@ -315,7 +317,7 @@ def _local_faq_answer(question: str) -> str:
         return "ECG is ₹200."
     if "x-ray" in q or "xray" in q and ("cost" in q or "price" in q):
         return "Chest X-Ray is ₹400."
-    if "hour" in q or "time" in q or "open" in q or "close" in q:
+    if any(term in q for term in ("hour", "timing", "opening", "closing", "when are you open", "when do you close")):
         return "Monday to Saturday: 9:00 AM to 7:00 PM. Sunday: Closed."
     if "location" in q or "address" in q or "where" in q:
         return "Road No. 12, Banjara Hills, Hyderabad, Telangana 500034"

@@ -26,10 +26,19 @@ SCOPES = ["https://www.googleapis.com/auth/calendar"]
 CALENDAR_ID = os.environ.get("GOOGLE_CALENDAR_ID", "primary")
 
 
+def _credentials_file() -> str:
+    return (
+        os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+        or os.environ.get("GOOGLE_CREDENTIALS_PATH")
+        or os.environ.get("GOOGLE_SHEETS_CREDENTIALS_FILE")
+        or ""
+    )
+
+
 def _service():
     """Build an authenticated Calendar v3 service from the service account."""
     credentials = Credentials.from_service_account_file(
-        os.environ["GOOGLE_CREDENTIALS_PATH"],
+        _credentials_file(),
         scopes=SCOPES,
     )
     return build("calendar", "v3", credentials=credentials, cache_discovery=False)
@@ -84,3 +93,23 @@ def slot_is_available(start: datetime.datetime) -> bool:
     result = service.freebusy().query(body=body).execute()
     busy = result.get("calendars", {}).get(CALENDAR_ID, {}).get("busy", [])
     return len(busy) == 0
+
+
+def delete_event(event_id: str) -> None:
+    """Delete an appointment event from the clinic calendar."""
+    _service().events().delete(calendarId=CALENDAR_ID, eventId=event_id).execute()
+
+
+def update_event(event_id: str, start: datetime.datetime, duration_minutes: int = 30) -> dict:
+    """Move an appointment event to a new start time."""
+    end = start + datetime.timedelta(minutes=duration_minutes)
+    service = _service()
+    event = service.events().get(calendarId=CALENDAR_ID, eventId=event_id).execute()
+    event["start"] = {"dateTime": start.isoformat()}
+    event["end"] = {"dateTime": end.isoformat()}
+    return service.events().update(
+        calendarId=CALENDAR_ID,
+        eventId=event_id,
+        body=event,
+        sendNotifications=False,
+    ).execute()
