@@ -257,6 +257,10 @@ def _regex_extract_slots(message: str) -> dict:
     if name_match2 and "name" not in result:
         result["name"] = name_match2.group(1).strip()
 
+    doctor_match = re.search(r"(?:with|doctor|dr\.?)\s+([A-Za-z]+(?:\s+[A-Za-z]+)*)", message, re.IGNORECASE)
+    if doctor_match:
+        result["doctor"] = doctor_match.group(1).strip()
+
     return result
 
 
@@ -278,8 +282,9 @@ def extract_booking_slots(message: str) -> dict:
         "- name: patient's full name\n"
         "- service: the medical service or test they want (e.g., General Consultation, Blood Test, Ultrasound)\n"
         "- slot: preferred date/time in natural language (e.g., 'tomorrow at 3 PM', '2026-10-20 15:00')\n\n"
+        "- doctor: clinician name if explicitly requested\n\n"
         "Reply with ONLY a JSON object like:\n"
-        '{"name": "John Doe", "service": "General Consultation", "slot": "tomorrow at 3 PM"}.\n\n'
+        '{"name": "John Doe", "service": "General Consultation", "slot": "tomorrow at 3 PM", "doctor": "Dr. Sharma"}.\n\n'
         "If a field is not mentioned, use null. Do not guess or infer missing fields."
     )
 
@@ -352,7 +357,7 @@ def answer_faq(question: str) -> str:
         "If it does, answer concisely and only with facts from the FAQ."
     )
 
-    for attempt in range(2):
+    for _ in range(2):
         try:
             return _chat(
                 [{"role": "system", "content": system}, {"role": "user", "content": question}],

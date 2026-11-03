@@ -58,7 +58,7 @@ class TestClinicAgent(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         mock_send.assert_called_once()
         args, _ = mock_send.call_args
-        self.assertIn("Thank you for confirming!", args[1])
+        self.assertIn("Services and pricing:", args[1])
 
     @patch("llm._chat")
     def test_faq_grounding_within_faq(self, mock_chat):

@@ -1,4 +1,4 @@
-﻿"""Meta WhatsApp Cloud API integration."""
+"""Meta WhatsApp Cloud API integration."""
 
 import json
 import os
@@ -25,14 +25,26 @@ def parse_meta_incoming(payload: dict) -> dict:
 
         message = messages[0]
         message_id = message.get("id")
-        if message.get("type") != "text":
+        interactive_id = None
+        if message.get("type") == "interactive":
+            interactive = message.get("interactive") or {}
+            reply = interactive.get("button_reply") or interactive.get("list_reply") or {}
+            interactive_id = reply.get("id")
+            body = (reply.get("title") or "").strip()
+        elif message.get("type") == "text":
+            body = ((message.get("text") or {}).get("body") or "").strip()
+        else:
             return {"from_phone": None, "body": None, "message_id": message_id}
 
         phone = (message.get("from") or "").strip()
-        body = ((message.get("text") or {}).get("body") or "").strip()
         if not phone or not body:
             return {"from_phone": None, "body": None, "message_id": message_id}
-        return {"from_phone": phone, "body": body, "message_id": message_id}
+        return {
+            "from_phone": phone,
+            "body": body,
+            "interactive_id": interactive_id,
+            "message_id": message_id,
+        }
     except (KeyError, IndexError, TypeError, AttributeError):
         return {"from_phone": None, "body": None, "message_id": None}
 
@@ -42,39 +54,110 @@ def send_whatsapp_message(to_phone: str, text: str) -> bool:
     if not text:
         logger.error("send_whatsapp_message aborted: text body is empty or None")
         return False
-
     token = (os.environ.get("META_WA_TOKEN") or "").strip().strip("'\"")
     if token.lower().startswith("bearer "):
         token = token[7:].strip()
     phone_number_id = (os.environ.get("META_WA_PHONE_NUMBER_ID") or "").strip().strip("'\"")
-    url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{phone_number_id}/messages"
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": to_phone,
-        "type": "text",
-        "text": {"body": text},
-    }
-    body = json.dumps(payload).encode("utf-8")
     req = request.Request(
-        url,
-        data=body,
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-        },
+        f"https://graph.facebook.com/{GRAPH_API_VERSION}/{phone_number_id}/messages",
+        data=json.dumps({
+            "messaging_product": "whatsapp", "to": to_phone,
+            "type": "text", "text": {"body": text},
+        }).encode("utf-8"),
+        headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"},
         method="POST",
     )
     try:
         with request.urlopen(req, timeout=15) as response:
             return 200 <= response.status < 300
-    except urllib.error.HTTPError as e:
-        error_body = e.read().decode("utf-8", errors="replace")
-        logger.error(f"Meta Graph API error ({e.code}): {error_body}")
+    except urllib.error.HTTPError as error:
+        logger.error("Meta Graph API error (%s): %s", error.code,
+                     error.read().decode("utf-8", errors="replace"))
         return False
-    except Exception as e:
-        logger.error(f"Failed to send request: {e}")
+    except Exception as error:
+        logger.error("Failed to send request: %s", error)
         return False
 
+
+def _interactive_request(to_phone: str, payload: dict) -> bool:
+    token = (os.environ.get("META_WA_TOKEN") or "").strip().strip("'\"")
+    if token.lower().startswith("bearer "):
+        token = token[7:].strip()
+    phone_number_id = (os.environ.get("META_WA_PHONE_NUMBER_ID") or "").strip().strip("'\"")
+    url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{phone_number_id}/messages"
+    body = json.dumps({
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": to_phone,
+        "type": "interactive",
+        "interactive": payload,
+    }).encode("utf-8")
+    req = request.Request(
+        url, data=body,
+        headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with request.urlopen(req, timeout=15) as response:
+            return 200 <= response.status < 300
+    except urllib.error.HTTPError as error:
+        logger.error("Meta Graph API interactive error (%s): %s", error.code,
+                     error.read().decode("utf-8", errors="replace"))
+        return False
+    except Exception as error:
+        logger.error("Failed to send interactive request: %s", error)
+        return False
+
+
+def send_whatsapp_buttons(to_phone: str, body_text: str, buttons: list[dict]) -> bool:
+    sanitized = []
+    seen = set()
+    for button in buttons[:3]:
+        button_id = str(button.get("id", "")).strip()
+        title = str(button.get("title", "")).strip()
+        if not button_id or not title:
+            continue
+        if button_id in seen:
+            continue
+        seen.add(button_id)
+        sanitized.append({
+            "type": "reply",
+            "reply": {"id": button_id, "title": title[:20]},
+        })
+    return _interactive_request(to_phone, {
+        "type": "button",
+        "body": {"text": body_text},
+        "action": {"buttons": sanitized},
+    })
+
+
+def send_whatsapp_list(
+    to_phone: str, body_text: str, button_label: str,
+    section_title: str, rows: list[dict],
+) -> bool:
+    sanitized = []
+    seen = set()
+    for row in rows[:10]:
+        row_id = str(row.get("id", "")).strip()
+        title = str(row.get("title", "")).strip()
+        if not row_id or not title:
+            continue
+        if row_id in seen:
+            continue
+        seen.add(row_id)
+        sanitized.append({
+            "id": row_id,
+            "title": title[:24],
+            "description": str(row.get("description", ""))[:72],
+        })
+    return _interactive_request(to_phone, {
+        "type": "list",
+        "body": {"text": body_text},
+        "action": {
+            "button": str(button_label)[:20],
+            "sections": [{"title": str(section_title)[:24], "rows": sanitized}],
+        },
+    })
 
 def send_owner_alert(
     patient_name: str,

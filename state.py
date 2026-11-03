@@ -1,8 +1,8 @@
 """
 In-memory conversation state for the Demo Clinic WhatsApp agent.
 
-STATE is a plain dict keyed by the patient's WhatsApp phone number (the value
-of Twilio's `From` field with the leading "whatsapp:" stripped).
+STATE is a plain dict keyed by the patient's WhatsApp phone number from Meta's
+webhook payload.
 
 Each value is a dict:
     consent:  bool        -- has the patient replied YES to the consent prompt?
@@ -26,6 +26,7 @@ def get(phone: str) -> dict:
             "intent": None,
             "booking": None,
             "step": None,
+            "deferred_intent_text": None,
             "candidate_date": None,
             "processed_message_ids": deque(maxlen=100),
         },
